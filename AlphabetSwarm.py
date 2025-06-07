@@ -94,6 +94,10 @@ PREVIEW_DURATION_MS = 3000  # Duration (ms) a letter stays in preview before rev
 PREVIEW_SPEED_FACTOR = 0.5  # Factor by which letter speed is reduced during preview.
 ENLARGED_LETTER_SIZE_FACTOR = 5.0 # Factor by which letter size is increased during preview.
 
+# --- Hint System Constants ---
+HINTS_PER_WORD = 3
+HINT_TIMER_DURATION_MS = 30000  # 30 seconds
+
 # --- Letter Attributes ---
 default_letter_size = 40    # Default font size for swarming letters.
 ENLARGED_LETTER_SIZE = int(default_letter_size * ENLARGED_LETTER_SIZE_FACTOR) # Calculated enlarged size.
@@ -108,6 +112,11 @@ target_word = random.choice(simple_words) # The word to be spelled.
 displayed_word_chars = ['_'] * len(target_word)
 # Index of the next letter to be spelled in target_word.
 current_letter_index = 0
+
+# --- Hint State Variables ---
+hints_used_this_word = 0
+hint_timer_start_time = 0  # Stores pygame.time.get_ticks() when the timer starts or resets
+is_hint_timer_active = False # Flag to indicate if the hint timer is running
 
 # --- Preview State Variables ---
 # The character (e.g., 'A') currently selected for preview.
@@ -148,6 +157,9 @@ for i in range(num_letters):
 
 # Pygame clock for controlling frame rate
 clock = pygame.time.Clock()
+
+# UI Font for hints and other UI elements
+ui_font = pygame.font.Font(None, 30)
 
 # Helper function to get the screen position of a letter slot in the target word display
 def get_slot_position(slot_index):
@@ -199,6 +211,7 @@ while running:
     # --- Delayed New Word Setup ---
     # If a new word setup is pending and the time has come.
     if pending_new_word_setup_time > 0 and current_time >= pending_new_word_setup_time:
+        # This check needs to be before hint logic that might alter current_letter_index
         target_word = random.choice(simple_words)
         current_letter_index = 0
         displayed_word_chars = ['_'] * len(target_word) # Reset with underscores
@@ -226,7 +239,70 @@ while running:
 
         previewed_letter_char = None # Clear any active preview
         active_preview_letter_indices = []
+
+        # Reset and start hint timer for the new word
+        hints_used_this_word = 0
+        hint_timer_start_time = current_time # current_time is pygame.time.get_ticks() from loop start
+        is_hint_timer_active = True
+
         pending_new_word_setup_time = 0 # Mark setup as complete
+
+    # --- Automatic Hint Trigger Logic ---
+    if is_hint_timer_active and hints_used_this_word < HINTS_PER_WORD and pending_new_word_setup_time == 0:
+        elapsed_time_since_last_action = current_time - hint_timer_start_time
+        if elapsed_time_since_last_action >= HINT_TIMER_DURATION_MS:
+            if current_letter_index < len(target_word): # Check if there's a letter to reveal
+                correct_letter_char = target_word[current_letter_index]
+
+                letter_to_animate_index = -1
+                # Prefer letters that are currently normal, then previewed, to avoid disrupting an active preview if possible
+                # This is a simple preference; more complex logic could find the "least disruptive" letter.
+                for state_preference in [STATE_NORMAL, STATE_PREVIEW]:
+                    for i in range(num_letters):
+                        if letters[i] == correct_letter_char and letter_states[i] == state_preference:
+                            letter_to_animate_index = i
+                            break
+                    if letter_to_animate_index != -1:
+                        break
+
+                if letter_to_animate_index != -1:
+                    idx = letter_to_animate_index
+
+                    # If the chosen hint letter was the one being previewed, clear global preview state
+                    if letter_states[idx] == STATE_PREVIEW and previewed_letter_char == letters[idx]:
+                        if idx in active_preview_letter_indices: # Should be true
+                            active_preview_letter_indices.remove(idx)
+                        if not active_preview_letter_indices: # If it was the only one
+                             previewed_letter_char = None
+
+                    letter_states[idx] = STATE_ANIMATING_TO_SLOT
+                    letter_target_slot_indices[idx] = current_letter_index
+                    letter_colors[idx] = GREEN
+
+                    print(f"Hint used: Revealing letter '{correct_letter_char}' for slot {current_letter_index}.")
+
+                    hints_used_this_word += 1
+                    current_letter_index += 1 # Advance game progress
+
+                    if correct_sound: # Use correct sound as feedback for hint
+                        correct_sound.play()
+
+                    # Reset or stop timer
+                    if current_letter_index < len(target_word) and hints_used_this_word < HINTS_PER_WORD:
+                        hint_timer_start_time = current_time
+                        is_hint_timer_active = True
+                    else:
+                        is_hint_timer_active = False
+                        # Word completion logic (if hint completed the word) will be checked in KEYDOWN or main loop
+                else:
+                    print(f"Warning: Hint triggered for '{correct_letter_char}', but no suitable instance found in swarm.")
+                    hint_timer_start_time = current_time # Reset timer to avoid rapid re-trigger if no letter found
+            else: # Word already complete, or some other edge case
+                is_hint_timer_active = False
+
+    # Ensure timer is inactive if all hints are used, regardless of other conditions
+    if hints_used_this_word >= HINTS_PER_WORD:
+        is_hint_timer_active = False
 
     # --- Event Handling ---
     for event in pygame.event.get():
@@ -279,12 +355,21 @@ while running:
 
                             current_letter_index += 1 # Advance to the next letter in the target word
 
+                            # Reset hint timer on correct guess, if word not yet complete
+                            if current_letter_index < len(target_word):
+                                hint_timer_start_time = current_time
+                                is_hint_timer_active = True # Ensure active
+                            else: # Word is now complete
+                                is_hint_timer_active = False
+                                # Word completion sound and message handled below
+
                             # --- Word Completion Check ---
                             if current_letter_index == len(target_word): # Word is complete
                                 if word_complete_sound:
                                     word_complete_sound.play()
                                 show_feedback_message_until = current_time + 2000 # Show "Well Done!"
                                 pending_new_word_setup_time = current_time + 2000 # Schedule new word setup
+                                # is_hint_timer_active is already set to False above
                         else: # Incorrect letter confirmed (e.g., 'A' confirmed, but 'C' was expected)
                             if incorrect_sound:
                                 incorrect_sound.play()
@@ -428,7 +513,7 @@ while running:
             letter_surface = font.render(letters[i], True, current_display_color)
             window.blit(letter_surface, (x, y))
 
-    # --- Draw UI Elements (Target Word, Feedback Messages) On Top ---
+    # --- Draw UI Elements (Target Word, Feedback Messages, Hints) On Top ---
     # Display the target word (e.g., "C A _")
     font_target_word = pygame.font.Font(None, 50)
     display_text = " ".join(displayed_word_chars) # Join with spaces for readability
@@ -442,6 +527,21 @@ while running:
         text_feedback = font_feedback.render("Well Done!", True, GREEN)
         text_rect_feedback = text_feedback.get_rect(center=(window_width // 2, window_height // 2))
         window.blit(text_feedback, text_rect_feedback)
+
+    # Display Hints Remaining
+    hints_text_str = f"Hints Left: {HINTS_PER_WORD - hints_used_this_word}/{HINTS_PER_WORD}"
+    hints_surface = ui_font.render(hints_text_str, True, WHITE)
+    hints_rect = hints_surface.get_rect(topright=(window_width - 20, 20))
+    window.blit(hints_surface, hints_rect)
+
+    # Display Hint Timer Countdown
+    if is_hint_timer_active and hints_used_this_word < HINTS_PER_WORD and pending_new_word_setup_time == 0 :
+        time_since_timer_start = current_time - hint_timer_start_time
+        time_remaining_s = max(0, (HINT_TIMER_DURATION_MS - time_since_timer_start) // 1000)
+        timer_text_str = f"Next Hint: {time_remaining_s}s"
+        timer_surface = ui_font.render(timer_text_str, True, WHITE)
+        timer_rect = timer_surface.get_rect(topright=(window_width - 20, hints_rect.bottom + 5))
+        window.blit(timer_surface, timer_rect)
 
     pygame.display.update() # Update the full display
     clock.tick(120) # Cap the frame rate
