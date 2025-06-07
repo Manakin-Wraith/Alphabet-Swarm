@@ -8,6 +8,8 @@ import random
 import string
 import math
 import sys
+import json
+import datetime
 
 # ------------- Pygame and Mixer Initialization -------------
 pygame.init()
@@ -197,6 +199,60 @@ def get_slot_position(slot_index):
     char_at_slot_index = displayed_word_chars[slot_index] if slot_index < len(displayed_word_chars) else '_'
     slot_center_x += font_target_word_calc.size(char_at_slot_index)[0] // 2; slot_y_pos = 30
     return (slot_center_x, slot_y_pos)
+
+def save_score(player_name: str, score: int, game_mode: str):
+    """Saves the player's score to a leaderboard file, keeping only top entries."""
+    LEADERBOARD_FILE = "leaderboard.json"
+    MAX_LEADERBOARD_ENTRIES = 20  # Keep only the top 20 scores
+
+    print(f"Info: Saving score {score} for {player_name} in {game_mode} mode.")
+
+    scores = []
+    try:
+        with open(LEADERBOARD_FILE, 'r') as f:
+            scores = json.load(f)
+    except FileNotFoundError:
+        print(f"Info: Leaderboard file '{LEADERBOARD_FILE}' not found. Creating a new one.")
+    except json.JSONDecodeError:
+        print(f"Warning: Leaderboard file '{LEADERBOARD_FILE}' contains invalid JSON. Starting with an empty list.")
+
+    new_score_entry = {
+        "name": player_name,
+        "score": score,
+        "timestamp": datetime.datetime.now().isoformat(),
+        "mode": game_mode
+    }
+    scores.append(new_score_entry)
+
+    # Sort scores in descending order by score
+    scores.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+    # Keep only the top MAX_LEADERBOARD_ENTRIES
+    scores = scores[:MAX_LEADERBOARD_ENTRIES]
+
+    try:
+        with open(LEADERBOARD_FILE, 'w') as f:
+            json.dump(scores, f, indent=4)
+        print(f"Info: Score for {player_name} saved successfully to {LEADERBOARD_FILE}.")
+    except IOError:
+        print(f"Error: Could not write to leaderboard file '{LEADERBOARD_FILE}'.")
+
+def load_scores() -> list:
+    """Loads scores from the leaderboard file."""
+    LEADERBOARD_FILE = "leaderboard.json"
+    try:
+        with open(LEADERBOARD_FILE, 'r') as f:
+            scores = json.load(f)
+            return scores
+    except FileNotFoundError:
+        print(f"Info: Leaderboard file '{LEADERBOARD_FILE}' not found. Returning empty list.")
+        return []
+    except json.JSONDecodeError:
+        print(f"Error: Could not decode leaderboard data from '{LEADERBOARD_FILE}'. Returning empty list.")
+        return []
+    except Exception as e: # Catch any other potential errors during file reading or parsing
+        print(f"An unexpected error occurred while loading scores: {e}. Returning empty list.")
+        return []
 
 # ------------- Swarm Data Initialization Function -------------
 def initialize_swarm_data():
@@ -397,7 +453,11 @@ def handle_events_game_play(event, current_time_ticks):
     global target_word, current_clue_text, letter_target_slot_indices, letter_colors
     global letter_feedback_flash_timers, current_player_turn
     if event.type == pygame.KEYDOWN:
-        if event.key == pygame.K_ESCAPE: current_game_state = STATE_MAIN_MENU; return
+        if event.key == pygame.K_ESCAPE:
+            if current_game_mode == GAME_MODE_1P and player_scores[0] > 0:
+                save_score(player_names[0], player_scores[0], GAME_MODE_1P)
+            current_game_state = STATE_MAIN_MENU
+            return
         if event.key == pygame.K_c: show_clue_on_screen = not show_clue_on_screen
         elif pending_new_word_setup_time == 0 and event.unicode.isalpha():
             pressed_char = event.unicode.upper(); is_confirmation_press = False
@@ -473,8 +533,13 @@ def update_game_play_logic(current_time_ticks):
         pending_new_word_setup_time = 0
         if current_game_mode == GAME_MODE_2P_VERSUS:
             if player_failed_last_word[0] and player_failed_last_word[1]: # Game Over Condition
+                # Save scores before transitioning to game over
+                if player_scores[0] > 0:
+                    save_score(player_names[0], player_scores[0], GAME_MODE_2P_VERSUS)
+                if player_scores[1] > 0:
+                    save_score(player_names[1], player_scores[1], GAME_MODE_2P_VERSUS)
                 current_game_state = STATE_VERSUS_GAME_OVER
-                print("DEBUG: Versus Game Over condition met.")
+                print("DEBUG: Versus Game Over condition met, scores saved.")
             else:
                 current_game_state = STATE_SHOW_TURN_TRANSITION
         else:
@@ -761,9 +826,68 @@ def handle_events_leaderboard_display(event):
         if event.key == pygame.K_RETURN:
             current_game_state = STATE_MAIN_MENU
 def draw_leaderboard_display(window_surface):
-    placeholder_text = ui_font.render(f"State: Leaderboard (Placeholder - Press Enter for Menu)", True, WHITE)
-    text_rect = placeholder_text.get_rect(center=(window_width // 2, window_height // 2))
-    window_surface.blit(placeholder_text, text_rect)
+    MAX_SCORES_TO_DISPLAY = 10
+    scores = load_scores()
+
+    # --- Title ---
+    title_surf = title_font.render("Leaderboard", True, GREEN) # GREEN for title as in main menu
+    title_rect = title_surf.get_rect(center=(window_width // 2, window_height // 6))
+    window_surface.blit(title_surf, title_rect)
+
+    # --- Scores or No Scores Message ---
+    if not scores:
+        no_scores_text = "No scores yet. Play a game to see your name here!"
+        no_scores_surf = ui_font.render(no_scores_text, True, WHITE)
+        no_scores_rect = no_scores_surf.get_rect(center=(window_width // 2, window_height // 2))
+        window_surface.blit(no_scores_surf, no_scores_rect)
+    else:
+        score_entry_height = ui_font.get_linesize()
+        total_list_height = score_entry_height * min(len(scores), MAX_SCORES_TO_DISPLAY)
+
+        # Calculate starting Y position to center the list
+        # Consider space below title and above footer
+        available_space = window_height - title_rect.bottom - 80 # 80 for footer and some padding
+        start_y = title_rect.bottom + (available_space - total_list_height) // 2
+        if start_y < title_rect.bottom + 20: # Ensure some space below title
+            start_y = title_rect.bottom + 20
+
+        for i, entry in enumerate(scores[:MAX_SCORES_TO_DISPLAY]):
+            player_name = entry.get("name", "N/A")
+            score = entry.get("score", 0)
+            # game_mode = entry.get("mode", "") # Game mode not displayed as per requirement, but available
+
+            rank_text = f"{i + 1}."
+            name_text = f"{player_name}"
+            score_text = f"- {score}"
+
+            # Render parts separately to allow different positioning or color if needed later
+            rank_surf = ui_font.render(rank_text, True, YELLOW)
+            name_surf = ui_font.render(name_text, True, WHITE)
+            score_surf = ui_font.render(score_text, True, WHITE)
+
+            current_y = start_y + i * score_entry_height
+
+            # Position: Rank (left-aligned), Name (center of remaining space), Score (right of name)
+            # A simpler centered approach for now:
+            full_text_line = f"{rank_text} {name_text} {score_text}"
+            line_surf = ui_font.render(full_text_line, True, WHITE)
+            line_rect = line_surf.get_rect(center=(window_width // 2, current_y))
+
+            # For more control, blit them separately:
+            # rank_rect = rank_surf.get_rect(topleft=(window_width // 2 - 150, current_y))
+            # name_rect = name_surf.get_rect(topleft=(rank_rect.right + 10, current_y))
+            # score_rect = score_surf.get_rect(topleft=(name_rect.right + 10, current_y))
+            # window_surface.blit(rank_surf, rank_rect)
+            # window_surface.blit(name_surf, name_rect)
+            # window_surface.blit(score_surf, score_rect)
+            window_surface.blit(line_surf, line_rect)
+
+
+    # --- Footer Instruction ---
+    instruction_text = "Press Enter to return to Main Menu"
+    instr_surf = ui_font.render(instruction_text, True, WHITE)
+    instr_rect = instr_surf.get_rect(center=(window_width // 2, window_height - 50))
+    window_surface.blit(instr_surf, instr_rect)
 
 # ------------- Initial Game Setup Function (New) -------------
 def setup_new_game_session(): # This is for a full new game (e.g. from Main Menu)
