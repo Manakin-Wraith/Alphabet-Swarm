@@ -36,8 +36,38 @@ except pygame.error:
     print(f"Warning: Sound file {word_complete_sound_path} not found. Word complete sound will be disabled.")
 
 # ------------- Game Configuration / Variables -------------
-# List of simple words for the player to spell
-simple_words = ["CAT", "DOG", "SUN", "BIG", "RED", "FUN"] # Potential for expansion
+WORD_LIST_FILENAME = "words.txt"
+DEFAULT_SIMPLE_WORDS = ["CAT", "DOG", "SUN", "BIG", "RED", "FUN", "EAT", "RUN", "TOP", "HOT", "POT", "SKY", "FLY", "TRY"]
+
+def load_words_from_file(filename):
+    """Loads words from a file, filters them, and returns a list of valid words."""
+    valid_words = []
+    try:
+        with open(filename, 'r') as f:
+            for line in f:
+                word = line.strip().upper()
+                if 3 <= len(word) <= 5 and word.isalpha():
+                    valid_words.append(word)
+        if not valid_words:
+            print(f"Info: No valid words (3-5 letters, alpha only) found in '{filename}'.")
+        else:
+            print(f"Info: Successfully loaded {len(valid_words)} words from '{filename}'.")
+    except FileNotFoundError:
+        print(f"Info: Word file '{filename}' not found.")
+    return valid_words
+
+# Load words or use default
+simple_words = load_words_from_file(WORD_LIST_FILENAME)
+if not simple_words:
+    simple_words = DEFAULT_SIMPLE_WORDS
+    print(f"Info: Using default word list of {len(simple_words)} words.")
+
+if not simple_words: # Should ideally not happen if DEFAULT_SIMPLE_WORDS is populated
+    print("CRITICAL ERROR: No words available to play the game. Exiting.")
+    pygame.quit()
+    import sys
+    sys.exit()
+
 
 # Game window settings
 window_width = 1000
@@ -62,7 +92,7 @@ STATE_PLACED = "placed"      # Letter has reached its slot in the target word.
 ANIMATION_SPEED = 10  # Speed (pixels per frame) of letter animation to the slot.
 PREVIEW_DURATION_MS = 3000  # Duration (ms) a letter stays in preview before reverting.
 PREVIEW_SPEED_FACTOR = 0.5  # Factor by which letter speed is reduced during preview.
-ENLARGED_LETTER_SIZE_FACTOR = 1.5 # Factor by which letter size is increased during preview.
+ENLARGED_LETTER_SIZE_FACTOR = 5.0 # Factor by which letter size is increased during preview.
 
 # --- Letter Attributes ---
 default_letter_size = 40    # Default font size for swarming letters.
@@ -287,6 +317,17 @@ while running:
                     for i in range(num_letters):
                         if letters[i] == pressed_char:
                             letter_states[i] = STATE_PREVIEW
+
+                            # Adjust position if enlarged letter goes off-screen
+                            x_pos, y_pos = letter_positions[i]
+                            if x_pos < 0: x_pos = 0
+                            if y_pos < 0: y_pos = 0
+                            if x_pos + ENLARGED_LETTER_SIZE > window_width:
+                                x_pos = window_width - ENLARGED_LETTER_SIZE
+                            if y_pos + ENLARGED_LETTER_SIZE > window_height:
+                                y_pos = window_height - ENLARGED_LETTER_SIZE
+                            letter_positions[i] = (x_pos, y_pos)
+
                             # Slow down for preview
                             letter_velocities[i] = (original_letter_velocities[i][0] * PREVIEW_SPEED_FACTOR,
                                                     original_letter_velocities[i][1] * PREVIEW_SPEED_FACTOR)
@@ -314,21 +355,8 @@ while running:
     # --- Drawing / Rendering ---
     window.fill(BLACK) # Clear screen
 
-    # Display the target word (e.g., "C A _")
-    font_target_word = pygame.font.Font(None, 50)
-    display_text = " ".join(displayed_word_chars) # Join with spaces for readability
-    text_target_word_surface = font_target_word.render(display_text, True, WHITE)
-    text_rect_target_word = text_target_word_surface.get_rect(center=(window_width // 2, 30))
-    window.blit(text_target_word_surface, text_rect_target_word)
-
-    # Display "Well Done!" feedback message if active
-    if current_time < show_feedback_message_until:
-        font_feedback = pygame.font.Font(None, 60)
-        text_feedback = font_feedback.render("Well Done!", True, GREEN)
-        text_rect_feedback = text_feedback.get_rect(center=(window_width // 2, window_height // 2))
-        window.blit(text_feedback, text_rect_feedback)
-
     # --- Update and Draw Each Swarming Letter ---
+    # These are drawn first, so UI elements like target word and messages can be on top.
     for i in range(num_letters):
         x, y = letter_positions[i]
         vx, vy = letter_velocities[i]
@@ -399,6 +427,21 @@ while running:
             font = pygame.font.Font(None, current_letter_draw_size)
             letter_surface = font.render(letters[i], True, current_display_color)
             window.blit(letter_surface, (x, y))
+
+    # --- Draw UI Elements (Target Word, Feedback Messages) On Top ---
+    # Display the target word (e.g., "C A _")
+    font_target_word = pygame.font.Font(None, 50)
+    display_text = " ".join(displayed_word_chars) # Join with spaces for readability
+    text_target_word_surface = font_target_word.render(display_text, True, WHITE)
+    text_rect_target_word = text_target_word_surface.get_rect(center=(window_width // 2, 30))
+    window.blit(text_target_word_surface, text_rect_target_word)
+
+    # Display "Well Done!" feedback message if active
+    if current_time < show_feedback_message_until:
+        font_feedback = pygame.font.Font(None, 60)
+        text_feedback = font_feedback.render("Well Done!", True, GREEN)
+        text_rect_feedback = text_feedback.get_rect(center=(window_width // 2, window_height // 2))
+        window.blit(text_feedback, text_rect_feedback)
 
     pygame.display.update() # Update the full display
     clock.tick(120) # Cap the frame rate
