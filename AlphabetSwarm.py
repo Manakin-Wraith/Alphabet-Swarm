@@ -37,30 +37,50 @@ except pygame.error:
 
 # ------------- Game Configuration / Variables -------------
 WORD_LIST_FILENAME = "words.txt"
-DEFAULT_SIMPLE_WORDS = ["CAT", "DOG", "SUN", "BIG", "RED", "FUN", "EAT", "RUN", "TOP", "HOT", "POT", "SKY", "FLY", "TRY"]
+DEFAULT_SIMPLE_WORDS = [
+    {'word': "CAT", 'clue': "A furry animal that meows"},
+    {'word': "DOG", 'clue': "Barks and wags its tail"},
+    {'word': "SUN", 'clue': "Shines during the day"},
+    {'word': "APPLE", 'clue': "A common red or green fruit"},
+    {'word': "HOUSE", 'clue': "Where people live"},
+    {'word': "BOOK", 'clue': "Something you read"},
+    {'word': "TREE", 'clue': "Has leaves and branches"},
+    {'word': "WATER", 'clue': "A clear liquid you drink"}
+]
 
 def load_words_from_file(filename):
-    """Loads words from a file, filters them, and returns a list of valid words."""
-    valid_words = []
+    """Loads words and clues from a file, filters them, and returns a list of dictionaries."""
+    valid_words = [] # Now stores dicts: {'word': "WORD", 'clue': "Clue"}
     try:
         with open(filename, 'r') as f:
-            for line in f:
-                word = line.strip().upper()
-                if 3 <= len(word) <= 5 and word.isalpha():
-                    valid_words.append(word)
+            for line_num, line in enumerate(f, 1):
+                parts = line.split(',', 1) # Split only on the first comma
+                if len(parts) == 2:
+                    word_candidate = parts[0].strip().upper()
+                    clue_candidate = parts[1].strip()
+                    if word_candidate and clue_candidate: # Both parts must have content
+                        if 3 <= len(word_candidate) <= 5 and word_candidate.isalpha():
+                            valid_words.append({'word': word_candidate, 'clue': clue_candidate})
+                        # else:
+                        #     print(f"Debug (line {line_num}): Word '{word_candidate}' invalid format/length/chars.")
+                    # else:
+                    #     print(f"Debug (line {line_num}): Line '{line.strip()}' missing word or clue after split.")
+                # else:
+                #     print(f"Debug (line {line_num}): Line '{line.strip()}' does not contain a comma for word,clue format.")
+
         if not valid_words:
-            print(f"Info: No valid words (3-5 letters, alpha only) found in '{filename}'.")
+            print(f"Info: No valid word-clue pairs (word 3-5 letters, alpha only; clue present) found in '{filename}'.")
         else:
-            print(f"Info: Successfully loaded {len(valid_words)} words from '{filename}'.")
+            print(f"Info: Successfully loaded {len(valid_words)} word-clue pairs from '{filename}'.")
     except FileNotFoundError:
         print(f"Info: Word file '{filename}' not found.")
     return valid_words
 
 # Load words or use default
-simple_words = load_words_from_file(WORD_LIST_FILENAME)
+simple_words = load_words_from_file(WORD_LIST_FILENAME) # This now holds list of dicts
 if not simple_words:
-    simple_words = DEFAULT_SIMPLE_WORDS
-    print(f"Info: Using default word list of {len(simple_words)} words.")
+    simple_words = DEFAULT_SIMPLE_WORDS # Fallback to default list of dicts
+    print(f"Info: Using default word list of {len(simple_words)} word-clue pairs.")
 
 if not simple_words: # Should ideally not happen if DEFAULT_SIMPLE_WORDS is populated
     print("CRITICAL ERROR: No words available to play the game. Exiting.")
@@ -107,7 +127,9 @@ letters = list(string.ascii_uppercase) # List of 'A' through 'Z'.
 
 # ------------- Initial Game State Setup -------------
 # --- Word Game State ---
-target_word = random.choice(simple_words) # The word to be spelled.
+selected_word_obj = random.choice(simple_words)
+target_word = selected_word_obj['word'] # String of the word to be spelled
+current_clue_text = selected_word_obj['clue'] # Associated clue
 # Represents the target word display, e.g., ['C', '_', 'T']
 displayed_word_chars = ['_'] * len(target_word)
 # Index of the next letter to be spelled in target_word.
@@ -117,6 +139,7 @@ current_letter_index = 0
 hints_used_this_word = 0
 hint_timer_start_time = 0  # Stores pygame.time.get_ticks() when the timer starts or resets
 is_hint_timer_active = False # Flag to indicate if the hint timer is running
+show_clue_on_screen = True # Default to showing the clue for a new word
 
 # --- Preview State Variables ---
 # The character (e.g., 'A') currently selected for preview.
@@ -212,7 +235,11 @@ while running:
     # If a new word setup is pending and the time has come.
     if pending_new_word_setup_time > 0 and current_time >= pending_new_word_setup_time:
         # This check needs to be before hint logic that might alter current_letter_index
-        target_word = random.choice(simple_words)
+        selected_word_obj_new = random.choice(simple_words)
+        target_word = selected_word_obj_new['word']
+        current_clue_text = selected_word_obj_new['clue']
+        show_clue_on_screen = True # Default to show clue for new word
+
         current_letter_index = 0
         displayed_word_chars = ['_'] * len(target_word) # Reset with underscores
 
@@ -310,7 +337,9 @@ while running:
             running = False
         elif event.type == pygame.KEYDOWN:
             # Process key press only if no new word setup is pending (i.e., game is active)
-            if pending_new_word_setup_time == 0 and event.unicode.isalpha():
+            if event.key == pygame.K_c: # 'C' key for Clue toggle
+                show_clue_on_screen = not show_clue_on_screen
+            elif pending_new_word_setup_time == 0 and event.unicode.isalpha():
                 pressed_char = event.unicode.upper()
                 is_confirmation_press = False
 
@@ -542,6 +571,14 @@ while running:
         timer_surface = ui_font.render(timer_text_str, True, WHITE)
         timer_rect = timer_surface.get_rect(topright=(window_width - 20, hints_rect.bottom + 5))
         window.blit(timer_surface, timer_rect)
+
+    # Display Clue
+    if show_clue_on_screen and current_clue_text and pending_new_word_setup_time == 0:
+        clue_surface = ui_font.render(f"Clue: {current_clue_text}", True, WHITE)
+        # Position clue in top-left, below hint status if hints are also very long, or adjust as needed
+        # For now, simple top-left. Consider wrapping for long clues later.
+        clue_rect = clue_surface.get_rect(topleft=(20, 20))
+        window.blit(clue_surface, clue_rect)
 
     pygame.display.update() # Update the full display
     clock.tick(120) # Cap the frame rate
