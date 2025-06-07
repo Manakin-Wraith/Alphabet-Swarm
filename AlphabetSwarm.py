@@ -101,10 +101,12 @@ input_active_player = 0; player_name_inputs = ["", ""]
 cursor_visible = True; cursor_timer = 0
 player_failed_last_word = [False, False]
 
-# --- Letter Attributes & Data Lists ---
+# --- Letter Attributes & Data Lists (Declared globally, populated by initialize_swarm_data) ---
 default_letter_size = 40
 ENLARGED_LETTER_SIZE = int(default_letter_size * ENLARGED_LETTER_SIZE_FACTOR)
-default_letter_speed = 2; num_letters = 26; letters = list(string.ascii_uppercase)
+default_letter_speed = 2
+letters = [] # Populated by initialize_swarm_data
+num_letters = 0 # Populated by initialize_swarm_data
 letter_positions, letter_velocities, original_letter_velocities = [], [], []
 letter_colors, letter_states, letter_preview_timers = [], [], []
 letter_target_slot_indices, letter_feedback_flash_timers = [], []
@@ -131,7 +133,7 @@ menu_item_font = pygame.font.Font(None, 50)
 title_font = pygame.font.Font(None, 74)
 feedback_font = pygame.font.Font(None, 60)
 
-# --- Button Configurations ---
+# --- Main Menu Button Configuration ---
 main_menu_buttons = {
     "1P_Game": {"text": "1 Player Game", "rect": None, "action_state": STATE_PLAYER_NAME_INPUT, "mode": GAME_MODE_1P, "hovered": False},
     "2P_Game": {"text": "2 Player Versus", "rect": None, "action_state": STATE_PLAYER_NAME_INPUT, "mode": GAME_MODE_2P_VERSUS, "hovered": False},
@@ -144,7 +146,6 @@ versus_game_over_buttons = {
     "MainMenu": {"text": "Main Menu", "rect": None, "action_state": STATE_MAIN_MENU, "hovered": False},
     "Leaderboard": {"text": "Leaderboard", "rect": None, "action_state": STATE_LEADERBOARD_DISPLAY, "hovered": False}
 }
-
 
 # ------------- Helper Functions -------------
 def get_word_base_score(word_str):
@@ -180,13 +181,52 @@ def get_slot_position(slot_index):
     slot_center_x += font_target_word_calc.size(char_at_slot_index)[0] // 2; slot_y_pos = 30
     return (slot_center_x, slot_y_pos)
 
+# ------------- Swarm Data Initialization Function -------------
+def initialize_swarm_data():
+    global letters, num_letters, letter_positions, letter_velocities, original_letter_velocities
+    global letter_colors, letter_states, letter_preview_timers, letter_target_slot_indices
+    global letter_feedback_flash_timers
+    global default_letter_speed, default_letter_size, window_width, window_height, string, random, math # Modules for use
+
+    letters = list(string.ascii_uppercase)
+    num_letters = len(letters)
+
+    # Clear and re-populate all swarm data lists
+    letter_positions.clear(); letter_velocities.clear(); original_letter_velocities.clear()
+    letter_colors.clear(); letter_states.clear(); letter_preview_timers.clear()
+    letter_target_slot_indices.clear(); letter_feedback_flash_timers.clear()
+
+    # Or re-assign:
+    # letter_positions = []; letter_velocities = []; original_letter_velocities = []
+    # letter_colors = []; letter_states = []; letter_preview_timers = []
+    # letter_target_slot_indices = []; letter_feedback_flash_timers = []
+
+
+    for i in range(num_letters):
+        x = random.randint(0, window_width - default_letter_size)
+        y = random.randint(0, window_height - default_letter_size)
+        letter_positions.append((x, y))
+
+        angle = random.uniform(0, 2 * math.pi)
+        speed = random.randint(1, default_letter_speed)
+        vx = math.cos(angle) * speed
+        vy = math.sin(angle) * speed
+        letter_velocities.append((vx, vy))
+        original_letter_velocities.append((vx, vy))
+
+        letter_colors.append((random.randint(50, 200), random.randint(50, 200), random.randint(50, 200)))
+
+        letter_states.append(STATE_NORMAL)
+        letter_preview_timers.append(0)
+        letter_target_slot_indices.append(-1)
+        letter_feedback_flash_timers.append(0)
+
 # ------------- Game Setup and Reset Functions -------------
 def setup_new_word_for_active_player(current_time_ticks):
     global target_word, current_clue_text, displayed_word_chars, current_letter_index
     global word_start_time, hints_used_this_word, hint_timer_start_time, is_hint_timer_active
     global show_clue_on_screen, previewed_letter_char, active_preview_letter_indices
-    global letter_states, letter_positions, letter_velocities, original_letter_velocities
-    global letter_colors, letter_preview_timers, letter_target_slot_indices, letter_feedback_flash_timers
+    # Removed letter swarm list globals as they are reset by initialize_swarm_data() if needed for full reset
     global player_failed_last_word, current_player_turn
 
     selected_word_obj = random.choice(simple_words)
@@ -207,31 +247,23 @@ def setup_new_word_for_active_player(current_time_ticks):
     if 0 <= player_idx < len(player_failed_last_word):
         player_failed_last_word[player_idx] = False
 
-    for i in range(num_letters):
-        letter_states[i] = STATE_NORMAL
-        letter_positions[i] = (random.randint(0, window_width - default_letter_size),
-                               random.randint(0, window_height - default_letter_size))
-        angle = random.uniform(0, 2 * math.pi)
-        speed = random.randint(1, default_letter_speed)
-        vx_new = math.cos(angle) * speed
-        vy_new = math.sin(angle) * speed
-        letter_velocities[i] = (vx_new, vy_new)
-        original_letter_velocities[i] = (vx_new, vy_new)
-        letter_colors[i] = (random.randint(50, 200), random.randint(50, 200), random.randint(50, 200))
-        letter_preview_timers[i] = 0
-        letter_target_slot_indices[i] = -1
-        letter_feedback_flash_timers[i] = 0
+    # Re-initialize swarm data for the new word (this scatters all letters)
+    # If letters should persist their state/position across words (except those used), this would be different.
+    # For current design, full re-scatter is fine.
+    initialize_swarm_data()
 
     print(f"Player {current_player_turn}'s turn. New word: {target_word}")
 
 def setup_new_game_session():
     global current_player_turn, player_scores, player_name_inputs, input_active_player
     global pending_new_word_setup_time, last_word_score, show_last_word_score_until
-    global player_failed_last_word, current_game_state # Added current_game_state
+    global player_failed_last_word, current_game_state
+    global target_word # Needed to ensure it's empty before first word setup
 
     if current_game_state == STATE_PLAYER_NAME_INPUT:
          player_scores = [0,0]
          current_player_turn = 1
+         player_names = ["Player 1", "Player 2"]
 
     player_name_inputs = ["", ""]
     input_active_player = 0
@@ -242,12 +274,9 @@ def setup_new_game_session():
     show_last_word_score_until = 0
     show_feedback_message_until = 0
 
-    # This will be called AFTER player names are input, or when transitioning to a new turn
-    # if not in 2P mode where STATE_SHOW_TURN_TRANSITION is used.
-    # For the very first game start, setup_new_word_for_active_player is called
-    # after player name input (when transitioning to STATE_GAME_PLAY).
-    # If it's a restart from game over, this also applies.
-    # If it's a new word in 1P mode, that's handled by update_game_play_logic calling setup_new_word_for_active_player.
+    target_word = "" # Clear target word before first real setup
+    initialize_swarm_data() # Initialize the swarm for the very first time or full reset
+
 
 # ------------- Game State Specific Functions -------------
 def handle_events_main_menu(event):
@@ -300,8 +329,7 @@ def handle_events_player_name_input(event):
             if current_game_mode == GAME_MODE_1P or active_input_list_index == 1:
                 if current_game_mode == GAME_MODE_1P and player_names[1] != "Player 2":
                     player_names[1] = "Player 2"
-                # Now that names are set, fully setup the first word for player 1
-                setup_new_word_for_active_player(pygame.time.get_ticks())
+                setup_new_word_for_active_player(pygame.time.get_ticks()) # Setup first word
                 current_game_state = STATE_GAME_PLAY
                 print(f"Names finalized: P1: {player_names[0]}, P2: {player_names[1]}. Starting game.")
             else:
@@ -632,12 +660,11 @@ def handle_events_show_turn_transition(event):
 def draw_show_turn_transition(window_surface):
     global turn_transition_button_rect, turn_transition_button_hovered
 
-    player_who_just_finished_idx = (current_player_turn % 2) # If current P1 (turn 1), this is P2 (idx 1). If current P2 (turn 2), this is P1 (idx 0).
-    # This is the player whose turn it *was*.
-    # The current_player_turn variable still holds the player who just finished.
+    # Player whose turn just ended is the one currently in current_player_turn *before* it's switched
     ended_player_name = player_names[current_player_turn - 1]
     ended_player_score = player_scores[current_player_turn - 1]
 
+    # Player who is NEXT
     next_player_logical_turn = 2 if current_player_turn == 1 else 1
     next_player_name_display = player_names[next_player_logical_turn - 1]
 
@@ -736,19 +763,15 @@ def draw_leaderboard_display(window_surface):
     window_surface.blit(placeholder_text, text_rect)
 
 # ------------- Initial Game Setup Function (New) -------------
-def setup_new_game_session():
-    global target_word, current_clue_text, displayed_word_chars, current_letter_index
-    global word_start_time, hints_used_this_word, hint_timer_start_time, is_hint_timer_active
-    global show_clue_on_screen, previewed_letter_char, active_preview_letter_indices
-    global pending_new_word_setup_time, last_word_score, show_last_word_score_until
-    global letter_states, letter_positions, letter_velocities, original_letter_velocities
-    global letter_colors, letter_preview_timers, letter_target_slot_indices, letter_feedback_flash_timers
-    global current_player_turn, player_scores, player_name_inputs, input_active_player, player_failed_last_word
+def setup_new_game_session(): # This is for a full new game (e.g. from Main Menu)
+    global current_player_turn, player_scores, player_name_inputs, input_active_player
+    global player_failed_last_word, pending_new_word_setup_time, last_word_score, show_last_word_score_until
+    global show_feedback_message_until, target_word # Added target_word to ensure it's clear for first word
 
-    if current_game_state == STATE_PLAYER_NAME_INPUT: # Called when transitioning from Main Menu to Player Name Input
+    if current_game_state == STATE_PLAYER_NAME_INPUT:
          player_scores = [0,0]
-         current_player_turn = 1 # Player 1 always starts a new game session
-         player_names = ["Player 1", "Player 2"] # Reset to defaults before input
+         current_player_turn = 1
+         player_names = ["Player 1", "Player 2"]
 
     player_name_inputs = ["", ""]
     input_active_player = 0
@@ -759,54 +782,8 @@ def setup_new_game_session():
     show_last_word_score_until = 0
     show_feedback_message_until = 0
 
-    # Word setup is now primarily in setup_new_word_for_active_player
-    # This function mainly resets session-wide variables.
-    # For the very first word after name input, setup_new_word_for_active_player will be called
-    # when transitioning from STATE_PLAYER_NAME_INPUT to STATE_GAME_PLAY.
-
-def setup_new_word_for_current_player(current_time_ticks): # Renamed from previous plan
-    """Sets up a new word, resets hints, timers, and letter states for the current active player."""
-    global target_word, current_clue_text, displayed_word_chars, current_letter_index
-    global word_start_time, hints_used_this_word, hint_timer_start_time, is_hint_timer_active
-    global show_clue_on_screen, previewed_letter_char, active_preview_letter_indices
-    global letter_states, letter_positions, letter_velocities, original_letter_velocities
-    global letter_colors, letter_preview_timers, letter_target_slot_indices, letter_feedback_flash_timers
-    global player_failed_last_word, current_player_turn
-
-    selected_word_obj = random.choice(simple_words)
-    target_word = selected_word_obj['word']
-    current_clue_text = selected_word_obj['clue']
-    displayed_word_chars = ['_'] * len(target_word)
-    current_letter_index = 0
-
-    word_start_time = current_time_ticks
-    hints_used_this_word = 0
-    hint_timer_start_time = current_time_ticks
-    is_hint_timer_active = True
-    show_clue_on_screen = True
-    previewed_letter_char = None
-    active_preview_letter_indices = []
-
-    player_idx = current_player_turn - 1
-    if 0 <= player_idx < len(player_failed_last_word):
-        player_failed_last_word[player_idx] = False
-
-    for i in range(num_letters):
-        letter_states[i] = STATE_NORMAL
-        letter_positions[i] = (random.randint(0, window_width - default_letter_size),
-                               random.randint(0, window_height - default_letter_size))
-        angle = random.uniform(0, 2 * math.pi)
-        speed = random.randint(1, default_letter_speed)
-        vx_new = math.cos(angle) * speed
-        vy_new = math.sin(angle) * speed
-        letter_velocities[i] = (vx_new, vy_new)
-        original_letter_velocities[i] = (vx_new, vy_new)
-        letter_colors[i] = (random.randint(50, 200), random.randint(50, 200), random.randint(50, 200))
-        letter_preview_timers[i] = 0
-        letter_target_slot_indices[i] = -1
-        letter_feedback_flash_timers[i] = 0
-
-    print(f"Player {current_player_turn}'s turn. New word: {target_word}")
+    target_word = "" # Clear target word; it will be set by setup_new_word_for_active_player
+    initialize_swarm_data()
 
 
 # ------------- Main Game Loop -------------
