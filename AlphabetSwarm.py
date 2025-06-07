@@ -118,6 +118,23 @@ ENLARGED_LETTER_SIZE_FACTOR = 5.0 # Factor by which letter size is increased dur
 HINTS_PER_WORD = 3
 HINT_TIMER_DURATION_MS = 30000  # 30 seconds
 
+# --- Game Mode & Player State Constants/Variables ---
+GAME_MODE_1P = "1P"
+GAME_MODE_2P_VERSUS = "2P_Versus"
+current_game_mode = GAME_MODE_1P  # Default to 1 Player mode
+
+current_player_turn = 1  # Player 1 starts (relevant for 2P mode)
+player_names = ["Player 1", "Player 2"] # Default placeholder names
+player_scores = [0, 0] # Index 0 for Player 1, Index 1 for Player 2
+
+word_start_time = 0  # To store pygame.time.get_ticks() when a word starts
+
+# --- Score Display Variables ---
+last_word_score = 0 # To store the score of the most recently completed word
+show_last_word_score_until = 0 # Timestamp to control display of this score
+SCORE_DISPLAY_DURATION_MS = 2000 # How long to show the score for (e.g., 2 seconds)
+
+
 # --- Letter Attributes ---
 default_letter_size = 40    # Default font size for swarming letters.
 ENLARGED_LETTER_SIZE = int(default_letter_size * ENLARGED_LETTER_SIZE_FACTOR) # Calculated enlarged size.
@@ -134,11 +151,12 @@ current_clue_text = selected_word_obj['clue'] # Associated clue
 displayed_word_chars = ['_'] * len(target_word)
 # Index of the next letter to be spelled in target_word.
 current_letter_index = 0
+word_start_time = pygame.time.get_ticks() # Initialize for the first word
 
 # --- Hint State Variables ---
 hints_used_this_word = 0
-hint_timer_start_time = 0  # Stores pygame.time.get_ticks() when the timer starts or resets
-is_hint_timer_active = False # Flag to indicate if the hint timer is running
+hint_timer_start_time = pygame.time.get_ticks() # Initialize hint timer for the first word
+is_hint_timer_active = True # Start hint timer for the first word
 show_clue_on_screen = True # Default to showing the clue for a new word
 
 # --- Preview State Variables ---
@@ -183,6 +201,42 @@ clock = pygame.time.Clock()
 
 # UI Font for hints and other UI elements
 ui_font = pygame.font.Font(None, 30)
+
+# ------------- Scoring Helper Functions -------------
+def get_word_base_score(word_str):
+    """Calculates the base score for a word based on its length."""
+    length = len(word_str)
+    if length == 3: return 30
+    elif length == 4: return 40
+    elif length == 5: return 50
+    else: return 0 # Should not happen with current word filters
+
+def calculate_speed_multiplier(time_taken_ms, word_length):
+    """Calculates a score multiplier based on how quickly the word was completed."""
+    if word_length == 0: return 1.0 # Avoid division by zero
+
+    # Time allotted per letter to achieve maximum bonus (e.g., 2.0x multiplier)
+    time_for_max_bonus_per_letter_ms = 3000  # 3 seconds per letter for full +1.0 bonus factor
+    # Time allotted per letter beyond which no bonus is given (i.e., 1.0x multiplier)
+    time_for_min_bonus_per_letter_ms = 8000  # 8 seconds per letter for +0.0 bonus factor
+
+    max_bonus_target_time_ms = word_length * time_for_max_bonus_per_letter_ms
+    min_bonus_target_time_ms = word_length * time_for_min_bonus_per_letter_ms
+
+    bonus_multiplier_factor = 0.0
+    if time_taken_ms < max_bonus_target_time_ms:
+        bonus_multiplier_factor = 1.0  # Max bonus factor
+    elif time_taken_ms < min_bonus_target_time_ms:
+        # Linear interpolation for bonus factor
+        range_ms = min_bonus_target_time_ms - max_bonus_target_time_ms
+        if range_ms > 0: # Should always be true if constants are set correctly
+            bonus_multiplier_factor = (min_bonus_target_time_ms - time_taken_ms) / range_ms
+        # else: bonus_multiplier_factor remains 0.0
+    # else: time_taken_ms >= min_bonus_target_time_ms, so bonus_multiplier_factor remains 0.0
+
+    final_multiplier = 1.0 + bonus_multiplier_factor
+    return max(1.0, min(final_multiplier, 2.0)) # Clamp multiplier between 1.0x and 2.0x
+
 
 # Helper function to get the screen position of a letter slot in the target word display
 def get_slot_position(slot_index):
@@ -234,6 +288,15 @@ while running:
     # --- Delayed New Word Setup ---
     # If a new word setup is pending and the time has come.
     if pending_new_word_setup_time > 0 and current_time >= pending_new_word_setup_time:
+        # --- Turn Switching Logic (before new word setup) ---
+        if current_game_mode == GAME_MODE_2P_VERSUS:
+            if current_player_turn == 1:
+                current_player_turn = 2
+            else:
+                current_player_turn = 1
+            print(f"Switching to Player {current_player_turn}'s turn.")
+            # Future: Could add a visual cue for player turn switch here.
+
         # This check needs to be before hint logic that might alter current_letter_index
         selected_word_obj_new = random.choice(simple_words)
         target_word = selected_word_obj_new['word']
@@ -269,16 +332,24 @@ while running:
 
         # Reset and start hint timer for the new word
         hints_used_this_word = 0
-        hint_timer_start_time = current_time # current_time is pygame.time.get_ticks() from loop start
+        hint_timer_start_time = current_time
         is_hint_timer_active = True
+        word_start_time = current_time # Reset word start time for scoring
 
         pending_new_word_setup_time = 0 # Mark setup as complete
 
     # --- Automatic Hint Trigger Logic ---
+    # Note: current_time is defined at the start of the main while loop
     if is_hint_timer_active and hints_used_this_word < HINTS_PER_WORD and pending_new_word_setup_time == 0:
         elapsed_time_since_last_action = current_time - hint_timer_start_time
         if elapsed_time_since_last_action >= HINT_TIMER_DURATION_MS:
             if current_letter_index < len(target_word): # Check if there's a letter to reveal
+                # --- Scoring: Word is being completed by a HINT ---
+                # This logic assumes a hint completing the word means no score for that word, or handle differently.
+                # For now, the hint advances current_letter_index. If that completes the word,
+                # the standard word completion check below will handle it.
+                # If hints should penalize score, that logic would go here or influence base_score/multiplier.
+
                 correct_letter_char = target_word[current_letter_index]
 
                 letter_to_animate_index = -1
@@ -318,9 +389,34 @@ while running:
                     if current_letter_index < len(target_word) and hints_used_this_word < HINTS_PER_WORD:
                         hint_timer_start_time = current_time
                         is_hint_timer_active = True
-                    else:
+                    else: # Word is now complete (by hint) OR all hints for this word are used
                         is_hint_timer_active = False
-                        # Word completion logic (if hint completed the word) will be checked in KEYDOWN or main loop
+
+                    # Check for word completion by hint
+                    if current_letter_index == len(target_word):
+                        # Score calculation for word completed by HINT
+                        # Potentially score 0 or apply penalty if hint completes it. For now, same logic.
+                        time_taken_ms = current_time - word_start_time
+                        base_score = get_word_base_score(target_word)
+                        # Speed multiplier might be less relevant if a hint was just used.
+                        # Consider if hints_used_this_word should affect score.
+                        # For now, we still calculate it, but it might be overridden by a "hint penalty".
+                        # Let's assume for now hints don't affect the base/speed score, only use up a "hint slot".
+                        speed_mult = calculate_speed_multiplier(time_taken_ms, len(target_word))
+                        score_for_this_word = int(base_score * speed_mult)
+
+                        player_idx = current_player_turn - 1
+                        if 0 <= player_idx < len(player_scores):
+                            player_scores[player_idx] += score_for_this_word
+                            print(f"Player {current_player_turn} scored {score_for_this_word} for '{target_word}' (completed by hint). Total: {player_scores[player_idx]}")
+
+                        last_word_score = score_for_this_word
+                        show_last_word_score_until = current_time + SCORE_DISPLAY_DURATION_MS
+
+                        if word_complete_sound:
+                            word_complete_sound.play()
+                        show_feedback_message_until = current_time + 2000
+                        pending_new_word_setup_time = current_time + 2000
                 else:
                     print(f"Warning: Hint triggered for '{correct_letter_char}', but no suitable instance found in swarm.")
                     hint_timer_start_time = current_time # Reset timer to avoid rapid re-trigger if no letter found
@@ -392,8 +488,21 @@ while running:
                                 is_hint_timer_active = False
                                 # Word completion sound and message handled below
 
-                            # --- Word Completion Check ---
+                            # --- Word Completion Check --- (Player-driven completion)
                             if current_letter_index == len(target_word): # Word is complete
+                                time_taken_ms = current_time - word_start_time
+                                base_score = get_word_base_score(target_word)
+                                speed_mult = calculate_speed_multiplier(time_taken_ms, len(target_word))
+                                score_for_this_word = int(base_score * speed_mult)
+
+                                player_idx = current_player_turn - 1
+                                if 0 <= player_idx < len(player_scores):
+                                    player_scores[player_idx] += score_for_this_word
+                                    print(f"Player {current_player_turn} scored {score_for_this_word} for '{target_word}'. Total: {player_scores[player_idx]}")
+
+                                last_word_score = score_for_this_word
+                                show_last_word_score_until = current_time + SCORE_DISPLAY_DURATION_MS
+
                                 if word_complete_sound:
                                     word_complete_sound.play()
                                 show_feedback_message_until = current_time + 2000 # Show "Well Done!"
@@ -579,6 +688,20 @@ while running:
         # For now, simple top-left. Consider wrapping for long clues later.
         clue_rect = clue_surface.get_rect(topleft=(20, 20))
         window.blit(clue_surface, clue_rect)
+
+    # Display Last Word Score (if active)
+    if show_last_word_score_until > current_time:
+        score_text_str = f"Word Score: {last_word_score}"
+        # Using ui_font for consistency, but could be feedback_font if larger text is desired
+        word_score_surface = ui_font.render(score_text_str, True, GREEN) # GREEN for positive feedback
+
+        # Position below "Well Done!" or centered if "Well Done!" is not shown
+        y_offset_for_score = window_height // 2 + 20
+        if show_feedback_message_until > current_time: # If "Well Done!" is also showing
+             y_offset_for_score = window_height // 2 + 60 # Position further down
+
+        word_score_rect = word_score_surface.get_rect(center=(window_width // 2, y_offset_for_score))
+        window.blit(word_score_surface, word_score_rect)
 
     pygame.display.update() # Update the full display
     clock.tick(120) # Cap the frame rate
