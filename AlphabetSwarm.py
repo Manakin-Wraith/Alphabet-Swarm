@@ -84,6 +84,7 @@ BLACK = (0, 0, 0); WHITE = (255, 255, 255); GREEN = (0, 255, 0); RED = (255, 0, 
 STATE_MAIN_MENU = "main_menu"; STATE_PLAYER_NAME_INPUT = "player_name_input"
 STATE_GAME_PLAY = "game_play"; STATE_SHOW_TURN_TRANSITION = "show_turn_transition"
 STATE_VERSUS_GAME_OVER = "versus_game_over"; STATE_LEADERBOARD_DISPLAY = "leaderboard_display"
+STATE_SINGLE_PLAYER_GAME_OVER = "single_player_game_over"  # New game state for 1P game over
 ACTION_QUIT = "ACTION_QUIT"
 current_game_state = STATE_MAIN_MENU
 
@@ -95,6 +96,7 @@ STATE_ANIMATING_TO_SLOT = "animating_to_slot"; STATE_PLACED = "placed"
 ANIMATION_SPEED = 10; PREVIEW_DURATION_MS = 3000; PREVIEW_SPEED_FACTOR = 0.5
 ENLARGED_LETTER_SIZE_FACTOR = 5.0; HINTS_PER_WORD = 3; HINT_TIMER_DURATION_MS = 30000
 SCORE_DISPLAY_DURATION_MS = 2000; MAX_NAME_LENGTH = 8; CURSOR_BLINK_RATE_MS = 500
+MAX_PLAYER_LIVES = 3  # Max lives for single player mode
 
 # --- Game Mode & Player State ---
 GAME_MODE_1P = "1P"; GAME_MODE_2P_VERSUS = "2P_Versus"; current_game_mode = GAME_MODE_1P
@@ -127,6 +129,7 @@ previewed_letter_char = None; active_preview_letter_indices = []
 # --- Timers & Message Variables ---
 show_feedback_message_until = 0; pending_new_word_setup_time = 0
 last_word_score = 0; show_last_word_score_until = 0
+player_lives = 0 # For 1P mode
 
 # --- Pygame Clock & UI Font ---
 clock = pygame.time.Clock()
@@ -145,6 +148,10 @@ main_menu_buttons = {
 turn_transition_button_rect = None
 turn_transition_button_hovered = False
 versus_game_over_buttons = {
+    "MainMenu": {"text": "Main Menu", "rect": None, "action_state": STATE_MAIN_MENU, "hovered": False},
+    "Leaderboard": {"text": "Leaderboard", "rect": None, "action_state": STATE_LEADERBOARD_DISPLAY, "hovered": False}
+}
+single_player_game_over_buttons = {
     "MainMenu": {"text": "Main Menu", "rect": None, "action_state": STATE_MAIN_MENU, "hovered": False},
     "Leaderboard": {"text": "Leaderboard", "rect": None, "action_state": STATE_LEADERBOARD_DISPLAY, "hovered": False}
 }
@@ -317,12 +324,14 @@ def setup_new_game_session():
     global current_player_turn, player_scores, player_name_inputs, input_active_player
     global pending_new_word_setup_time, last_word_score, show_last_word_score_until
     global player_failed_last_word, current_game_state
-    global target_word, show_feedback_message_until
+    global target_word, show_feedback_message_until, player_lives, MAX_PLAYER_LIVES, current_game_mode
 
     if current_game_state == STATE_PLAYER_NAME_INPUT:
          player_scores = [0,0]
          current_player_turn = 1
          player_names = ["Player 1", "Player 2"]
+         if current_game_mode == GAME_MODE_1P:
+             player_lives = MAX_PLAYER_LIVES
 
     player_name_inputs = ["", ""]
     input_active_player = 0
@@ -568,10 +577,33 @@ def update_game_play_logic(current_time_ticks):
                         player_idx_fail = current_player_turn - 1
                         if 0 <= player_idx_fail < len(player_failed_last_word): player_failed_last_word[player_idx_fail] = True
                         print(f"Player {current_player_turn} failed '{target_word}' after all hints.")
-                        last_word_score = 0 ; show_last_word_score_until = current_time_ticks + SCORE_DISPLAY_DURATION_MS
-                        show_feedback_message_until = current_time_ticks + 2000
-                        pending_new_word_setup_time = current_time_ticks + 2000
-                        is_hint_timer_active = False
+
+                        if current_game_mode == GAME_MODE_1P:
+                            global player_lives # Ensure we can modify player_lives
+                            player_lives -= 1
+                            print(f"Player 1 has {player_lives} lives remaining.") # For debugging
+                            if player_lives <= 0:
+                                print(f"Player 1 has run out of lives. Game Over.") # For debugging
+                                save_score(player_names[0], player_scores[0], GAME_MODE_1P)
+                                current_game_state = STATE_SINGLE_PLAYER_GAME_OVER
+                                last_word_score = 0
+                                show_last_word_score_until = current_time_ticks + SCORE_DISPLAY_DURATION_MS
+                                show_feedback_message_until = 0
+                                pending_new_word_setup_time = 0
+                                is_hint_timer_active = False
+                            else:
+                                # Lives > 0, normal word failure procedure (new word will be set up)
+                                last_word_score = 0
+                                show_last_word_score_until = current_time_ticks + SCORE_DISPLAY_DURATION_MS
+                                show_feedback_message_until = current_time_ticks + 2000
+                                pending_new_word_setup_time = current_time_ticks + 2000
+                                is_hint_timer_active = False
+                        else: # For 2P mode or other modes, keep existing behavior
+                            last_word_score = 0
+                            show_last_word_score_until = current_time_ticks + SCORE_DISPLAY_DURATION_MS
+                            show_feedback_message_until = current_time_ticks + 2000
+                            pending_new_word_setup_time = current_time_ticks + 2000
+                            is_hint_timer_active = False
                     elif current_letter_index == len(target_word):
                         player_idx_complete = current_player_turn - 1
                         if 0 <= player_idx_complete < len(player_failed_last_word): player_failed_last_word[player_idx_complete] = False
@@ -711,6 +743,15 @@ def draw_game_play(window_surface, current_time_ticks):
     p1_score_surface = ui_font.render(p1_score_str, True, WHITE)
     p1_score_rect = p1_score_surface.get_rect(topleft=(20, current_ui_y_offset_left))
     window_surface.blit(p1_score_surface, p1_score_rect)
+    current_ui_y_offset_left = p1_score_rect.bottom + 5
+
+    if current_game_mode == GAME_MODE_1P:
+        global player_lives # Ensure access to global player_lives
+        lives_text_str = f"Lives: {player_lives}"
+        lives_surface = ui_font.render(lives_text_str, True, WHITE)
+        lives_rect = lives_surface.get_rect(topleft=(20, current_ui_y_offset_left))
+        window_surface.blit(lives_surface, lives_rect)
+        current_ui_y_offset_left = lives_rect.bottom + 5 # Update offset for any potential elements below
 
     # 7. Draw Current Player's Turn (Bottom Center)
     active_player_name = player_names[current_player_turn - 1]
@@ -889,16 +930,69 @@ def draw_leaderboard_display(window_surface):
     instr_rect = instr_surf.get_rect(center=(window_width // 2, window_height - 50))
     window_surface.blit(instr_surf, instr_rect)
 
+# --- Single Player Game Over State ---
+def draw_single_player_game_over(window_surface):
+    global single_player_game_over_buttons, window_width, window_height, title_font, ui_font, feedback_font, player_names, player_scores, GREEN, WHITE, YELLOW, menu_item_font
+
+    game_over_text_str = "Game Over!"
+    final_score_text_str = f"{player_names[0]}'s Score: {player_scores[0]}"
+
+    game_over_surf = feedback_font.render(game_over_text_str, True, GREEN)
+    game_over_rect = game_over_surf.get_rect(center=(window_width // 2, window_height // 2 - 100))
+
+    final_score_surf = ui_font.render(final_score_text_str, True, WHITE)
+    final_score_rect = final_score_surf.get_rect(center=(window_width // 2, window_height // 2 - 40))
+
+    window_surface.blit(game_over_surf, game_over_rect)
+    window_surface.blit(final_score_surf, final_score_rect)
+
+    button_start_y = final_score_rect.bottom + 70
+    button_spacing = 60
+    for index, key in enumerate(single_player_game_over_buttons):
+        button_info = single_player_game_over_buttons[key]
+        text_color = YELLOW if button_info['hovered'] else WHITE
+        text_surf = menu_item_font.render(button_info['text'], True, text_color)
+        y_pos = button_start_y + index * button_spacing
+        button_rect = text_surf.get_rect(center=(window_width // 2, y_pos))
+        single_player_game_over_buttons[key]['rect'] = button_rect
+        window_surface.blit(text_surf, button_rect)
+
+def handle_events_single_player_game_over(event):
+    global current_game_state, running, single_player_game_over_buttons, STATE_MAIN_MENU, STATE_LEADERBOARD_DISPLAY
+    if event.type == pygame.QUIT:
+        running = False
+    elif event.type == pygame.MOUSEMOTION:
+        mouse_pos = pygame.mouse.get_pos()
+        for key in single_player_game_over_buttons:
+            button = single_player_game_over_buttons[key]
+            if button["rect"] and button["rect"].collidepoint(mouse_pos):
+                button["hovered"] = True
+            else:
+                button["hovered"] = False
+    elif event.type == pygame.MOUSEBUTTONDOWN:
+        if event.button == 1: # Left mouse button
+            mouse_pos = pygame.mouse.get_pos()
+            for key in single_player_game_over_buttons:
+                button = single_player_game_over_buttons[key]
+                if button["rect"] and button["rect"].collidepoint(mouse_pos):
+                    action = button["action_state"]
+                    current_game_state = action
+                    for btn_key in single_player_game_over_buttons: # Reset hover states
+                         single_player_game_over_buttons[btn_key]['hovered'] = False
+                    break
+
 # ------------- Initial Game Setup Function (New) -------------
 def setup_new_game_session(): # This is for a full new game (e.g. from Main Menu)
     global current_player_turn, player_scores, player_name_inputs, input_active_player
     global player_failed_last_word, pending_new_word_setup_time, last_word_score, show_last_word_score_until
-    global show_feedback_message_until, target_word
+    global show_feedback_message_until, target_word, player_lives, MAX_PLAYER_LIVES, current_game_mode
 
     if current_game_state == STATE_PLAYER_NAME_INPUT:
          player_scores = [0,0]
          current_player_turn = 1
          player_names = ["Player 1", "Player 2"]
+         if current_game_mode == GAME_MODE_1P:
+            player_lives = MAX_PLAYER_LIVES
 
     player_name_inputs = ["", ""]
     input_active_player = 0
@@ -936,6 +1030,8 @@ while running:
             handle_events_versus_game_over(event)
         elif current_game_state == STATE_LEADERBOARD_DISPLAY:
             handle_events_leaderboard_display(event)
+        elif current_game_state == STATE_SINGLE_PLAYER_GAME_OVER:
+            handle_events_single_player_game_over(event)
 
     if not running: break
 
@@ -959,6 +1055,8 @@ while running:
         draw_versus_game_over(window)
     elif current_game_state == STATE_LEADERBOARD_DISPLAY:
         draw_leaderboard_display(window)
+    elif current_game_state == STATE_SINGLE_PLAYER_GAME_OVER:
+        draw_single_player_game_over(window)
 
     pygame.display.update()
     clock.tick(120)
