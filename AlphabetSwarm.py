@@ -19,6 +19,9 @@ pygame.mixer.init()
 correct_sound_path = "correct.wav"
 incorrect_sound_path = "incorrect.wav"
 word_complete_sound_path = "word_complete.wav"
+word_fail_sound_path = "word_fail.wav"
+hint_sound_path = "hint.wav"
+powerup_sound_path = "powerup.wav"
 try:
     correct_sound = pygame.mixer.Sound(correct_sound_path)
 except pygame.error:
@@ -31,6 +34,18 @@ try:
     word_complete_sound = pygame.mixer.Sound(word_complete_sound_path)
 except pygame.error:
     word_complete_sound = None; print(f"Warning: Sound file {word_complete_sound_path} not found.")
+try:
+    word_fail_sound = pygame.mixer.Sound(word_fail_sound_path)
+except pygame.error:
+    word_fail_sound = None; print(f"Warning: Sound file {word_fail_sound_path} not found.")
+try:
+    hint_sound = pygame.mixer.Sound(hint_sound_path)
+except pygame.error:
+    hint_sound = None; print(f"Warning: Sound file {hint_sound_path} not found.")
+try:
+    powerup_sound = pygame.mixer.Sound(powerup_sound_path)
+except pygame.error:
+    powerup_sound = None; print(f"Warning: Sound file {powerup_sound_path} not found.")
 
 # ------------- Game Configuration / Variables -------------
 WORD_LIST_FILENAME = "words.txt"
@@ -131,12 +146,36 @@ show_feedback_message_until = 0; pending_new_word_setup_time = 0
 last_word_score = 0; show_last_word_score_until = 0
 player_lives = 0 # For 1P mode
 
+# --- Power-ups ---
+POWERUP_SLOW_MOTION = "slow_motion"
+POWERUP_REVEAL_LETTER = "reveal_letter"
+POWERUP_BONUS_POINTS = "bonus_points"
+powerups = []
+POWERUP_SPAWN_CHANCE = 0.1 # 10% chance to spawn a power-up every 5 seconds
+POWERUP_DURATION_MS = 5000
+last_powerup_spawn_check = 0
+
 # --- Pygame Clock & UI Font ---
 clock = pygame.time.Clock()
-ui_font = pygame.font.Font(None, 40)
-menu_item_font = pygame.font.Font(None, 50)
-title_font = pygame.font.Font(None, 74)
-feedback_font = pygame.font.Font(None, 60)
+try:
+    ui_font = pygame.font.Font("font.ttf", 40)
+    menu_item_font = pygame.font.Font("font.ttf", 50)
+    title_font = pygame.font.Font("font.ttf", 74)
+    feedback_font = pygame.font.Font("font.ttf", 60)
+except pygame.error:
+    print("Warning: font.ttf not found, using default font.")
+    ui_font = pygame.font.Font(None, 40)
+    menu_item_font = pygame.font.Font(None, 50)
+    title_font = pygame.font.Font(None, 74)
+    feedback_font = pygame.font.Font(None, 60)
+
+# --- Background Image ---
+try:
+    background_image = pygame.image.load("background.jpg")
+    background_image = pygame.transform.scale(background_image, (window_width, window_height))
+except pygame.error:
+    background_image = None
+    print("Warning: background.jpg not found, using solid color background.")
 
 # --- Main Menu Button Configuration ---
 main_menu_buttons = {
@@ -260,6 +299,14 @@ def load_scores() -> list:
     except Exception as e: # Catch any other potential errors during file reading or parsing
         print(f"An unexpected error occurred while loading scores: {e}. Returning empty list.")
         return []
+
+def spawn_powerup():
+    """Spawns a new power-up at a random location."""
+    global powerups
+    powerup_type = random.choice([POWERUP_SLOW_MOTION, POWERUP_REVEAL_LETTER, POWERUP_BONUS_POINTS])
+    x = random.randint(0, window_width - 30)
+    y = random.randint(0, window_height - 30)
+    powerups.append({"type": powerup_type, "rect": pygame.Rect(x, y, 30, 30), "spawn_time": pygame.time.get_ticks()})
 
 # ------------- Swarm Data Initialization Function -------------
 def initialize_swarm_data():
@@ -460,7 +507,13 @@ def handle_events_game_play(event, current_time_ticks):
     global last_word_score, show_last_word_score_until, hints_used_this_word, hint_timer_start_time
     global is_hint_timer_active, word_start_time, pending_new_word_setup_time, displayed_word_chars
     global target_word, current_clue_text, letter_target_slot_indices, letter_colors
-    global letter_feedback_flash_timers, current_player_turn
+    global letter_feedback_flash_timers, current_player_turn, powerups
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        for powerup in powerups[:]:
+            if powerup["rect"].collidepoint(event.pos):
+                activate_powerup(powerup)
+                powerups.remove(powerup)
+                if powerup_sound: powerup_sound.play()
     if event.type == pygame.KEYDOWN:
         if event.key == pygame.K_ESCAPE:
             if current_game_mode == GAME_MODE_1P and player_scores[0] > 0:
@@ -528,6 +581,27 @@ def handle_events_game_play(event, current_time_ticks):
                         letter_velocities[i] = (original_letter_velocities[i][0] * PREVIEW_SPEED_FACTOR, original_letter_velocities[i][1] * PREVIEW_SPEED_FACTOR)
                         letter_preview_timers[i] = current_time_ticks + PREVIEW_DURATION_MS ; active_preview_letter_indices.append(i)
 
+def activate_powerup(powerup):
+    """Activates a power-up's effect."""
+    global letter_velocities, original_letter_velocities, player_scores, current_player_turn
+    powerup_type = powerup["type"]
+    if powerup_type == POWERUP_SLOW_MOTION:
+        for i in range(num_letters):
+            vx, vy = letter_velocities[i]
+            letter_velocities[i] = (vx * 0.5, vy * 0.5)
+    elif powerup_type == POWERUP_REVEAL_LETTER:
+        if current_letter_index < len(target_word):
+            correct_letter_char = target_word[current_letter_index]
+            for i in range(num_letters):
+                if letters[i] == correct_letter_char and letter_states[i] == STATE_NORMAL:
+                    letter_states[i] = STATE_ANIMATING_TO_SLOT
+                    letter_target_slot_indices[i] = current_letter_index
+                    letter_colors[i] = GREEN
+                    break
+            current_letter_index += 1
+    elif powerup_type == POWERUP_BONUS_POINTS:
+        player_scores[current_player_turn - 1] += 50
+
 def update_game_play_logic(current_time_ticks):
     global target_word, current_clue_text, displayed_word_chars, current_letter_index, word_start_time
     global hints_used_this_word, hint_timer_start_time, is_hint_timer_active, show_clue_on_screen
@@ -536,7 +610,12 @@ def update_game_play_logic(current_time_ticks):
     global letter_target_slot_indices, letter_feedback_flash_timers, pending_new_word_setup_time
     global last_word_score, show_last_word_score_until, current_player_turn, player_scores, player_failed_last_word
     global current_game_mode, simple_words, letters, num_letters, current_game_state, STATE_SHOW_TURN_TRANSITION
-    global default_letter_size, default_letter_speed
+    global default_letter_size, default_letter_speed, last_powerup_spawn_check
+
+    if current_time_ticks - last_powerup_spawn_check > 5000:
+        last_powerup_spawn_check = current_time_ticks
+        if random.random() < POWERUP_SPAWN_CHANCE:
+            spawn_powerup()
 
     if pending_new_word_setup_time > 0 and current_time_ticks >= pending_new_word_setup_time:
         pending_new_word_setup_time = 0
@@ -571,12 +650,13 @@ def update_game_play_logic(current_time_ticks):
                     letter_states[idx] = STATE_ANIMATING_TO_SLOT; letter_target_slot_indices[idx] = current_letter_index; letter_colors[idx] = GREEN
                     print(f"Hint used: Revealing letter '{correct_letter_char}' for slot {current_letter_index}.")
                     hints_used_this_word += 1; current_letter_index += 1
-                    if correct_sound: correct_sound.play()
+                    if hint_sound: hint_sound.play()
 
                     if hints_used_this_word >= HINTS_PER_WORD and current_letter_index < len(target_word):
                         player_idx_fail = current_player_turn - 1
                         if 0 <= player_idx_fail < len(player_failed_last_word): player_failed_last_word[player_idx_fail] = True
                         print(f"Player {current_player_turn} failed '{target_word}' after all hints.")
+                        if word_fail_sound: word_fail_sound.play()
 
                         if current_game_mode == GAME_MODE_1P:
                             global player_lives # Ensure we can modify player_lives
@@ -753,7 +833,18 @@ def draw_game_play(window_surface, current_time_ticks):
         window_surface.blit(lives_surface, lives_rect)
         current_ui_y_offset_left = lives_rect.bottom + 5 # Update offset for any potential elements below
 
-    # 7. Draw Current Player's Turn (Bottom Center)
+    # 7. Draw Power-ups
+    for powerup in powerups:
+        color = WHITE
+        if powerup["type"] == POWERUP_SLOW_MOTION:
+            color = (0, 0, 255) # Blue
+        elif powerup["type"] == POWERUP_REVEAL_LETTER:
+            color = (255, 255, 0) # Yellow
+        elif powerup["type"] == POWERUP_BONUS_POINTS:
+            color = (0, 255, 0) # Green
+        pygame.draw.rect(window_surface, color, powerup["rect"])
+
+    # 8. Draw Current Player's Turn (Bottom Center)
     active_player_name = player_names[current_player_turn - 1]
     turn_text_str = f"{active_player_name}'s Turn"
     turn_surface = ui_font.render(turn_text_str, True, WHITE)
@@ -1042,7 +1133,10 @@ while running:
         update_player_name_input_logic(current_time)
 
     # --- Drawing (State-Dependent) ---
-    window.fill(BLACK)
+    if background_image:
+        window.blit(background_image, (0, 0))
+    else:
+        window.fill(BLACK)
     if current_game_state == STATE_MAIN_MENU:
         draw_main_menu(window)
     elif current_game_state == STATE_PLAYER_NAME_INPUT:
